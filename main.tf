@@ -9,6 +9,7 @@ terraform {
 
 provider "aws" {
   # No credentials configured - relies on dynamic credentials from HCP Terraform
+  region = "us-east-1"
 }
 
 data "aws_caller_identity" "current" {}
