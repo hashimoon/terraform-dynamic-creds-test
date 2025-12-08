@@ -17,3 +17,8 @@ output "region" {
   description = "The AWS region"
   value       = data.aws_region.current.name
 }
+
+output "test_policy_arn" {
+  description = "ARN of the test IAM policy (verifies write permissions)"
+  value       = aws_iam_policy.test_write_permission.arn
+}
