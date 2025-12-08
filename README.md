@@ -29,7 +29,7 @@ Create a role with this trust policy:
     {
       "Effect": "Allow",
       "Principal": {
-        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/app.terraform.io"
+        "Federated": "<OIDC_PRODIVER_ARN>"
       },
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
@@ -37,7 +37,7 @@ Create a role with this trust policy:
           "app.terraform.io:aud": "aws.workload.identity"
         },
         "StringLike": {
-          "app.terraform.io:sub": "organization:<YOUR_ORG>:project:*:workspace:*:run_phase:*"
+          "app.terraform.io:sub": "organization:<YOUR_ORG>:run_phase:*"
         }
       }
     }
