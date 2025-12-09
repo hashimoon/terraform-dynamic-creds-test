@@ -11,3 +11,17 @@ run "verify_aws_identity" {
     error_message = "Caller ARN should be a valid AWS ARN"
   }
 }
+
+run "verify_aws_write_permission" {
+  command = apply
+
+  assert {
+    condition     = aws_iam_policy.test_write_permission.arn != ""
+    error_message = "IAM policy should be created with a valid ARN"
+  }
+
+  assert {
+    condition     = can(regex("arn:aws:iam::", aws_iam_policy.test_write_permission.arn))
+    error_message = "Policy ARN should be a valid IAM ARN"
+  }
+}

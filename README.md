@@ -4,9 +4,10 @@ A minimal Terraform module to verify AWS dynamic credentials work with HCP Terra
 
 ## What This Module Does
 
-- Calls `sts:GetCallerIdentity` to verify AWS authentication
-- Outputs the account ID, ARN, and region of the assumed role
-- Includes a test that asserts the identity was retrieved successfully
+- Calls `sts:GetCallerIdentity` to verify AWS authentication (read permission)
+- Creates an IAM policy to verify write permissions
+- Outputs the account ID, ARN, region, and test policy ARN
+- Includes tests that verify both read and write permissions
 
 ## AWS Setup
 
@@ -29,7 +30,7 @@ Create a role with this trust policy:
     {
       "Effect": "Allow",
       "Principal": {
-        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/app.terraform.io"
+        "Federated": "<OIDC_PRODIVER_ARN>"
       },
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
@@ -37,7 +38,7 @@ Create a role with this trust policy:
           "app.terraform.io:aud": "aws.workload.identity"
         },
         "StringLike": {
-          "app.terraform.io:sub": "organization:<YOUR_ORG>:project:*:workspace:*:run_phase:*"
+          "app.terraform.io:sub": "organization:<YOUR_ORG>:run_phase:*"
         }
       }
     }
@@ -55,6 +56,17 @@ Attach this minimal policy:
       "Effect": "Allow",
       "Action": "sts:GetCallerIdentity",
       "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions"
+      ],
+      "Resource": "arn:aws:iam::*:policy/terraform-dynamic-creds-test-policy-*"
     }
   ]
 }
