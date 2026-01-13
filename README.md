@@ -38,7 +38,7 @@ Create a role with this trust policy:
           "app.terraform.io:aud": "aws.workload.identity"
         },
         "StringLike": {
-          "app.terraform.io:sub": "organization:<YOUR_ORG>:run_phase:*"
+          "app.terraform.io:sub": "organization:<YOUR_ORG>:*"
         }
       }
     }
