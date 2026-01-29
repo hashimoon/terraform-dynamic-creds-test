@@ -1,119 +1,33 @@
-# AWS Dynamic Credentials Test Module
+# Dynamic Credentials Test Modules
 
-A minimal Terraform module to verify AWS dynamic credentials work with HCP Terraform registry module testing.
+Minimal Terraform modules to verify dynamic credentials work with HCP Terraform registry module testing.
 
-## What This Module Does
+Each provider lives in its own subdirectory and is imported as a separate registry module using the source directory setting.
 
-- Calls `sts:GetCallerIdentity` to verify AWS authentication (read permission)
-- Creates an IAM policy to verify write permissions
-- Outputs the account ID, ARN, region, and test policy ARN
-- Includes tests that verify both read and write permissions
+## Overview
 
-## AWS Setup
+Each module:
+- Verifies authentication via a read operation (data source)
+- Verifies write permissions by creating a free resource
+- Includes tests that validate both read and write capabilities
 
-### 1. Create OIDC Identity Provider (if not exists)
-
-In AWS IAM Console:
-- Go to Identity Providers → Add Provider
-- Type: OpenID Connect
-- Provider URL: `https://app.terraform.io`
-- Audience: `aws.workload.identity`
-
-### 2. Create IAM Role
-
-Create a role with this trust policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "<OIDC_PROVIDER_ARN>"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "app.terraform.io:aud": "aws.workload.identity"
-        },
-        "StringLike": {
-          "app.terraform.io:sub": "organization:<YOUR_ORG>:project:<YOUR_PROJECT>:workspace:<YOUR_WORKSPACE>:run_phase:*"
-        }
-      }
-    }
-  ]
-}
-```
-
-Attach this minimal policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "sts:GetCallerIdentity",
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreatePolicy",
-        "iam:DeletePolicy",
-        "iam:GetPolicy",
-        "iam:GetPolicyVersion",
-        "iam:ListPolicyVersions"
-      ],
-      "Resource": "arn:aws:iam::*:policy/terraform-dynamic-creds-test-policy-*"
-    }
-  ]
-}
-```
+| Provider | Directory | Read Operations | Write Operations |
+|----------|-----------|----------------|------------------|
+| AWS | `aws/` | `aws_caller_identity`, `aws_region` | `aws_iam_policy` |
+| GCP | `gcp/` | `google_client_config` | `google_project_iam_custom_role` |
+| Azure | `azure/` | `azurerm_client_config`, `azurerm_subscription` | `azurerm_resource_group` |
 
 ## Publishing to HCP Terraform
 
-1. Push this repo to GitHub/GitLab
-2. In HCP Terraform, go to Registry → Publish → Module
-3. Connect to your VCS and select this repo
+When importing each module from the registry, set the **source directory** to the provider subdirectory (`aws`, `gcp`, or `azure`).
 
-## Configure Test Settings
+## Setup
 
-After publishing:
+Each provider directory includes a README with setup instructions. GCP and Azure also include setup scripts:
 
-1. Go to the module in the registry
-2. Click "Tests" tab → "Test settings"
-3. Add these environment variables:
-
-| Key | Value | Sensitive |
-|-----|-------|-----------|
-| `TFC_AWS_PROVIDER_AUTH` | `true` | No |
-| `TFC_AWS_RUN_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>` | No |
-
-4. Save and trigger a test run
-
-## Expected Results
-
-The test should pass and show output like:
-
-```
-account_id = "123456789012"
-caller_arn = "arn:aws:sts::123456789012:assumed-role/tfc-dynamic-creds-role/..."
-user_id = "AROAEXAMPLE:..."
-region = "us-east-1"
-test_policy_arn = "arn:aws:iam::123456789012:policy/terraform-dynamic-creds-test-policy-..."
-```
-
-## GCP and Azure Modules
-
-Templates for GCP and Azure dynamic credentials test modules are available in the `gcp/` and `azure/` directories. Each includes:
-- Terraform configuration (`main.tf`, `variables.tf`, `outputs.tf`)
-- Test file (`tests/dynamic_creds.tftest.hcl`)
-- Setup script (`setup-*-dynamic-creds.sh`)
-- README with setup instructions
-
-To create registry modules for those providers, copy the directory contents to a new repository.
+- **AWS**: See [`aws/README.md`](aws/README.md)
+- **GCP**: See [`gcp/README.md`](gcp/README.md) or run `gcp/setup-gcp-dynamic-creds.sh`
+- **Azure**: See [`azure/README.md`](azure/README.md) or run `azure/setup-azure-dynamic-creds.sh`
 
 ## References
 
