@@ -105,8 +105,16 @@ get_hcp_config() {
 create_workload_identity_pool() {
     print_header "Creating Workload Identity Pool"
 
-    if gcloud iam workload-identity-pools describe "$POOL_NAME" --location="global" --project="$PROJECT_ID" &>/dev/null; then
+    local pool_state
+    pool_state=$(gcloud iam workload-identity-pools describe "$POOL_NAME" --location="global" --project="$PROJECT_ID" --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
+
+    if [ "$pool_state" = "ACTIVE" ]; then
         print_warning "Workload Identity Pool '$POOL_NAME' already exists"
+    elif [ "$pool_state" = "DELETED" ]; then
+        gcloud iam workload-identity-pools undelete "$POOL_NAME" \
+            --location="global" \
+            --project="$PROJECT_ID"
+        print_success "Restored Workload Identity Pool: $POOL_NAME"
     else
         gcloud iam workload-identity-pools create "$POOL_NAME" \
             --location="global" \
@@ -120,13 +128,27 @@ create_workload_identity_pool() {
 create_oidc_provider() {
     print_header "Creating OIDC Provider"
 
-    if gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
+    local provider_state
+    provider_state=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
         --location="global" \
         --workload-identity-pool="$POOL_NAME" \
-        --project="$PROJECT_ID" &>/dev/null; then
+        --project="$PROJECT_ID" --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
+
+    if [ "$provider_state" = "ACTIVE" ]; then
         print_warning "OIDC Provider '$PROVIDER_NAME' already exists"
+    elif [ "$provider_state" = "DELETED" ]; then
+        gcloud iam workload-identity-pools providers undelete "$PROVIDER_NAME" \
+            --location="global" \
+            --workload-identity-pool="$POOL_NAME" \
+            --project="$PROJECT_ID"
+        print_success "Restored OIDC Provider: $PROVIDER_NAME"
     else
-        local attribute_condition="assertion.terraform_test_run == 'true' && assertion.terraform_organization_name == '$ORG_NAME'"
+        local attribute_condition
+        if [ -n "$MODULE_NAME" ]; then
+            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME' && assertion.terraform_module_name == '$MODULE_NAME'"
+        else
+            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME'"
+        fi
 
         gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_NAME" \
             --location="global" \
@@ -164,14 +186,7 @@ create_service_account() {
 grant_workload_identity_user() {
     print_header "Granting Workload Identity User Role"
 
-    local member
-    if [ -n "$MODULE_NAME" ]; then
-        # Specific module
-        member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.terraform_module_name/${MODULE_NAME}"
-    else
-        # All module tests (terraform_test_run == true)
-        member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.terraform_test_run/true"
-    fi
+    local member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.terraform_organization_name/${ORG_NAME}"
 
     gcloud iam service-accounts add-iam-policy-binding \
         "$SERVICE_ACCOUNT_EMAIL" \
