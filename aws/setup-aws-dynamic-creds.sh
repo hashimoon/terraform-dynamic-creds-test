@@ -231,39 +231,7 @@ EOF
 attach_permissions() {
     print_header "Attaching Permissions Policy"
 
-    echo "Select a permissions level for module tests:"
-    echo ""
-    echo "  1) Read-only (sts:GetCallerIdentity only)"
-    echo "  2) IAM role admin (for modules that create IAM custom roles)"
-    echo "  3) PowerUser (broad access, excludes IAM management)"
-    echo "  4) Skip (attach policies manually later)"
-    echo ""
-    read -p "Select option [1/2/3/4]: " PERM_OPTION
-
-    case "$PERM_OPTION" in
-        1)
-            PERMISSIONS_POLICY=$(cat << 'EOF'
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "sts:GetCallerIdentity",
-      "Resource": "*"
-    }
-  ]
-}
-EOF
-)
-            # Create or update inline policy
-            aws iam put-role-policy \
-                --role-name "$ROLE_NAME" \
-                --policy-name "$POLICY_NAME" \
-                --policy-document "$PERMISSIONS_POLICY"
-            print_success "Attached read-only permissions"
-            ;;
-        2)
-            PERMISSIONS_POLICY=$(cat << 'EOF'
+    PERMISSIONS_POLICY=$(cat << 'EOF'
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -275,43 +243,24 @@ EOF
     {
       "Effect": "Allow",
       "Action": [
-        "iam:CreateRole",
-        "iam:DeleteRole",
-        "iam:GetRole",
-        "iam:ListRolePolicies",
-        "iam:ListAttachedRolePolicies",
-        "iam:ListInstanceProfilesForRole",
         "iam:CreatePolicy",
         "iam:DeletePolicy",
         "iam:GetPolicy",
         "iam:GetPolicyVersion",
         "iam:ListPolicyVersions"
       ],
-      "Resource": "*"
+      "Resource": "arn:aws:iam::*:policy/terraform-dynamic-creds-test-policy-*"
     }
   ]
 }
 EOF
 )
-            aws iam put-role-policy \
-                --role-name "$ROLE_NAME" \
-                --policy-name "$POLICY_NAME" \
-                --policy-document "$PERMISSIONS_POLICY"
-            print_success "Attached IAM role admin permissions"
-            ;;
-        3)
-            aws iam attach-role-policy \
-                --role-name "$ROLE_NAME" \
-                --policy-arn "arn:aws:iam::aws:policy/PowerUserAccess"
-            print_success "Attached PowerUserAccess managed policy"
-            ;;
-        4)
-            print_warning "Skipping permissions. Attach policies manually to role: $ROLE_NAME"
-            ;;
-        *)
-            print_warning "Invalid option. Skipping permissions. Attach policies manually to role: $ROLE_NAME"
-            ;;
-    esac
+
+    aws iam put-role-policy \
+        --role-name "$ROLE_NAME" \
+        --policy-name "$POLICY_NAME" \
+        --policy-document "$PERMISSIONS_POLICY"
+    print_success "Attached permissions: sts:GetCallerIdentity + IAM policy CRUD (scoped to test policies)"
 }
 
 # Print HCP Terraform configuration
