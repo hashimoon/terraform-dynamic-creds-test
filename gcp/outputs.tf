@@ -6,6 +6,7 @@ output "project" {
 output "access_token_set" {
   description = "Whether an access token was obtained"
   value       = data.google_client_config.current.access_token != ""
+  sensitive   = true
 }
 
 output "test_role_id" {
