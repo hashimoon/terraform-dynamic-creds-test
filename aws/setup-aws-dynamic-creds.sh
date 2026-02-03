@@ -44,8 +44,12 @@ check_prerequisites() {
     fi
     print_success "AWS CLI is installed"
 
-    if ! aws sts get-caller-identity &>/dev/null; then
-        print_error "Not authenticated with AWS CLI. Run 'aws configure' or set credentials first"
+    local caller_identity_err
+    if ! caller_identity_err=$(aws sts get-caller-identity 2>&1); then
+        print_error "Not authenticated with AWS CLI:"
+        echo "  $caller_identity_err"
+        echo ""
+        echo "  Try: 'aws configure' or 'aws sso login'"
         exit 1
     fi
     print_success "AWS CLI is authenticated"
@@ -150,13 +154,10 @@ create_iam_role() {
         sub_condition="organization:${ORG_NAME}:module:*:operation:test_run"
     fi
 
-    # Determine StringEquals vs StringLike based on wildcards
-    local sub_condition_type="StringEquals"
+    # Build trust policy - use StringLike for both when wildcards present,
+    # otherwise merge aud and sub into a single StringEquals block
     if [[ "$sub_condition" == *"*"* ]]; then
-        sub_condition_type="StringLike"
-    fi
-
-    TRUST_POLICY=$(cat << EOF
+        TRUST_POLICY=$(cat << EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -170,7 +171,7 @@ create_iam_role() {
         "StringEquals": {
           "${OIDC_PROVIDER_URL}:aud": "aws.workload.identity"
         },
-        "${sub_condition_type}": {
+        "StringLike": {
           "${OIDC_PROVIDER_URL}:sub": "${sub_condition}"
         }
       }
@@ -179,6 +180,29 @@ create_iam_role() {
 }
 EOF
 )
+    else
+        TRUST_POLICY=$(cat << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "${OIDC_PROVIDER_ARN}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "${OIDC_PROVIDER_URL}:aud": "aws.workload.identity",
+          "${OIDC_PROVIDER_URL}:sub": "${sub_condition}"
+        }
+      }
+    }
+  ]
+}
+EOF
+)
+    fi
 
     # Check if role already exists
     if aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
