@@ -99,9 +99,9 @@ get_azure_info() {
 get_hcp_config() {
     print_header "HCP Terraform Configuration"
 
-    read -p "HCP Terraform Organization ID (e.g., org-abc123xyz): " ORG_ID
-    if [ -z "$ORG_ID" ]; then
-        print_error "Organization ID is required"
+    read -p "HCP Terraform Organization Name (e.g., my-org): " ORG_NAME
+    if [ -z "$ORG_NAME" ]; then
+        print_error "Organization name is required"
         exit 1
     fi
 
@@ -109,7 +109,7 @@ get_hcp_config() {
     echo "Optional: Restrict to a specific module (leave blank to allow all modules)"
     read -p "Module Name (e.g., terraform-azurerm-network): " MODULE_NAME
 
-    print_success "Organization ID: $ORG_ID"
+    print_success "Organization: $ORG_NAME"
     if [ -n "$MODULE_NAME" ]; then
         print_success "Module: $MODULE_NAME"
     else
@@ -165,13 +165,25 @@ create_service_principal() {
 create_federated_credential() {
     print_header "Creating Federated Credential"
 
-    # Build the subject identifier for module tests
+    # Build the subject identifier for module TEST runs.
+    #
+    # Test run subject format:
+    #   organization:{ORG_NAME}:module:{MODULE_NAME}:operation:test_run
+    #
+    # Regular workspace run subject format (different - uses project/workspace):
+    #   organization:{ORG_NAME}:project:{PROJECT}:workspace:{WORKSPACE}:run_phase:{plan|apply}
+    #
+    # The presence of ':module:' in the subject is UNIQUE to test runs, so matching
+    # on ':module:' inherently restricts to test runs only.
     if [ -n "$MODULE_NAME" ]; then
-        # Specific module, all versions
-        SUBJECT="organization:${ORG_ID}:module:${MODULE_NAME}:*"
+        # Specific module - exact match including :operation:test_run
+        SUBJECT="organization:${ORG_NAME}:module:${MODULE_NAME}:operation:test_run"
     else
         # All modules in the organization
-        SUBJECT="organization:${ORG_ID}:module:*:*"
+        # Note: Azure wildcards only work at the end, so we can't specify
+        # *:operation:test_run. However, ':module:' only appears in test run
+        # subjects, so this is still secure.
+        SUBJECT="organization:${ORG_NAME}:module:*"
     fi
 
     # Check if federated credential already exists
@@ -277,4 +289,63 @@ main() {
     echo -e "Configure the settings above in your registry module's test configuration."
 }
 
-main "$@"
+# Cleanup resources
+cleanup() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║   Azure Dynamic Credentials Cleanup                            ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    check_prerequisites
+
+    # Get subscription info
+    SUBSCRIPTION_ID=$(az account show --query id -o tsv 2>/dev/null || echo "")
+    SUBSCRIPTION_NAME=$(az account show --query name -o tsv 2>/dev/null || echo "")
+
+    # Check if app exists
+    APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv 2>/dev/null || echo "")
+
+    if [ -z "$APP_ID" ]; then
+        print_warning "App Registration '$APP_NAME' not found. Nothing to clean up."
+        exit 0
+    fi
+
+    APP_OBJECT_ID=$(az ad app show --id "$APP_ID" --query id -o tsv 2>/dev/null || echo "")
+
+    echo ""
+    echo -e "${YELLOW}The following resources will be deleted:${NC}"
+    echo "  - Contributor role assignment on subscription: $SUBSCRIPTION_NAME"
+    echo "  - App Registration: $APP_NAME (Client ID: $APP_ID)"
+    echo "  (This also removes the service principal and federated credentials)"
+    echo ""
+    read -p "Continue? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    print_header "Removing Role Assignment"
+    if az role assignment delete --assignee "$APP_ID" --role "Contributor" \
+        --scope "/subscriptions/$SUBSCRIPTION_ID" 2>/dev/null; then
+        print_success "Removed Contributor role assignment"
+    else
+        print_warning "Role assignment not found or already removed"
+    fi
+
+    print_header "Removing App Registration"
+    if az ad app delete --id "$APP_OBJECT_ID" 2>/dev/null; then
+        print_success "Deleted App Registration: $APP_NAME"
+    else
+        print_warning "App Registration not found or already deleted"
+    fi
+
+    print_header "Cleanup Complete"
+    echo -e "${GREEN}Azure resources have been removed.${NC}"
+}
+
+if [ "$1" = "--cleanup" ]; then
+    cleanup
+else
+    main "$@"
+fi

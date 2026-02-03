@@ -105,8 +105,16 @@ get_hcp_config() {
 create_workload_identity_pool() {
     print_header "Creating Workload Identity Pool"
 
-    if gcloud iam workload-identity-pools describe "$POOL_NAME" --location="global" --project="$PROJECT_ID" &>/dev/null; then
+    local pool_state
+    pool_state=$(gcloud iam workload-identity-pools describe "$POOL_NAME" --location="global" --project="$PROJECT_ID" --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
+
+    if [ "$pool_state" = "ACTIVE" ]; then
         print_warning "Workload Identity Pool '$POOL_NAME' already exists"
+    elif [ "$pool_state" = "DELETED" ]; then
+        gcloud iam workload-identity-pools undelete "$POOL_NAME" \
+            --location="global" \
+            --project="$PROJECT_ID"
+        print_success "Restored Workload Identity Pool: $POOL_NAME"
     else
         gcloud iam workload-identity-pools create "$POOL_NAME" \
             --location="global" \
@@ -120,20 +128,48 @@ create_workload_identity_pool() {
 create_oidc_provider() {
     print_header "Creating OIDC Provider"
 
-    if gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
+    local provider_state
+    provider_state=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_NAME" \
         --location="global" \
         --workload-identity-pool="$POOL_NAME" \
-        --project="$PROJECT_ID" &>/dev/null; then
-        print_warning "OIDC Provider '$PROVIDER_NAME' already exists"
-    else
-        local attribute_condition="assertion.terraform_test_run == 'true' && assertion.terraform_organization_name == '$ORG_NAME'"
+        --project="$PROJECT_ID" --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
 
+    if [ "$provider_state" = "ACTIVE" ]; then
+        print_warning "OIDC Provider '$PROVIDER_NAME' already exists"
+    elif [ "$provider_state" = "DELETED" ]; then
+        gcloud iam workload-identity-pools providers undelete "$PROVIDER_NAME" \
+            --location="global" \
+            --workload-identity-pool="$POOL_NAME" \
+            --project="$PROJECT_ID"
+        print_success "Restored OIDC Provider: $PROVIDER_NAME"
+    else
+        local attribute_condition
+        # For module TEST runs (not regular workspace runs), the subject format is:
+        # organization:{ORG_NAME}:module:{MODULE_NAME}:operation:test_run
+        #
+        # Regular workspace runs have a different format:
+        # organization:{ORG_NAME}:project:{PROJECT}:workspace:{WORKSPACE}:run_phase:{plan|apply}
+        #
+        # We MUST check for ':operation:test_run' to ensure we only accept test runs.
+        if [ -n "$MODULE_NAME" ]; then
+            # Filter by organization, specific module, and verify it's a test run
+            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME' && assertion.sub.contains(':module:$MODULE_NAME:') && assertion.sub.endsWith(':operation:test_run')"
+        else
+            # Filter by organization and verify it's a test run (any module)
+            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME' && assertion.sub.endsWith(':operation:test_run')"
+        fi
+
+        # Note: For module test runs, HCP Terraform provides these claims:
+        # - terraform_run_phase (always "plan" for test runs)
+        # - terraform_organization_id
+        # - terraform_organization_name
+        # - terraform_run_id
         gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_NAME" \
             --location="global" \
             --workload-identity-pool="$POOL_NAME" \
             --issuer-uri="https://app.terraform.io" \
             --allowed-audiences="gcp.workload.identity" \
-            --attribute-mapping="google.subject=assertion.sub,attribute.terraform_run_id=assertion.terraform_run_id,attribute.terraform_module_name=assertion.terraform_module_name,attribute.terraform_test_run=assertion.terraform_test_run,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name" \
+            --attribute-mapping="google.subject=assertion.sub,attribute.terraform_run_id=assertion.terraform_run_id,attribute.terraform_run_phase=assertion.terraform_run_phase,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name" \
             --attribute-condition="$attribute_condition" \
             --project="$PROJECT_ID"
         print_success "Created OIDC Provider: $PROVIDER_NAME"
@@ -164,14 +200,7 @@ create_service_account() {
 grant_workload_identity_user() {
     print_header "Granting Workload Identity User Role"
 
-    local member
-    if [ -n "$MODULE_NAME" ]; then
-        # Specific module
-        member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.terraform_module_name/${MODULE_NAME}"
-    else
-        # All module tests (terraform_test_run == true)
-        member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.terraform_test_run/true"
-    fi
+    local member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.terraform_organization_name/${ORG_NAME}"
 
     gcloud iam service-accounts add-iam-policy-binding \
         "$SERVICE_ACCOUNT_EMAIL" \
@@ -206,6 +235,7 @@ print_hcp_config() {
     echo -e "TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL         ${GREEN}${SERVICE_ACCOUNT_EMAIL}${NC}"
     echo -e "TFC_GCP_WORKLOAD_PROVIDER_NAME            ${GREEN}${WORKLOAD_PROVIDER_NAME}${NC}"
     echo -e "TFC_GCP_WORKLOAD_IDENTITY_AUDIENCE        ${GREEN}gcp.workload.identity${NC}"
+    echo -e "TF_VAR_gcp_project_id                     ${GREEN}${PROJECT_ID}${NC}"
     echo ""
 }
 
@@ -245,4 +275,88 @@ main() {
     echo -e "Configure the settings above in your registry module's test configuration."
 }
 
-main "$@"
+# Cleanup resources
+cleanup() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║   GCP Dynamic Credentials Cleanup                              ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    check_prerequisites
+
+    # Get project info
+    CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+    if [ -n "$CURRENT_PROJECT" ]; then
+        read -p "GCP Project ID [$CURRENT_PROJECT]: " PROJECT_ID
+        PROJECT_ID=${PROJECT_ID:-$CURRENT_PROJECT}
+    else
+        read -p "GCP Project ID: " PROJECT_ID
+    fi
+
+    if [ -z "$PROJECT_ID" ]; then
+        print_error "Project ID is required"
+        exit 1
+    fi
+
+    SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+    echo ""
+    echo -e "${YELLOW}The following resources will be deleted:${NC}"
+    echo "  - Service Account: $SERVICE_ACCOUNT_EMAIL"
+    echo "  - OIDC Provider: $PROVIDER_NAME"
+    echo "  - Workload Identity Pool: $POOL_NAME"
+    echo "  - IAM Role Admin binding for service account"
+    echo ""
+    read -p "Continue? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    print_header "Removing IAM Role Admin Binding"
+    if gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+        --role="roles/iam.roleAdmin" \
+        --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+        --condition=None 2>/dev/null; then
+        print_success "Removed roles/iam.roleAdmin binding"
+    else
+        print_warning "IAM binding not found or already removed"
+    fi
+
+    print_header "Removing Service Account"
+    if gcloud iam service-accounts delete "$SERVICE_ACCOUNT_EMAIL" \
+        --project="$PROJECT_ID" --quiet 2>/dev/null; then
+        print_success "Deleted service account: $SERVICE_ACCOUNT_EMAIL"
+    else
+        print_warning "Service account not found or already deleted"
+    fi
+
+    print_header "Removing OIDC Provider"
+    if gcloud iam workload-identity-pools providers delete "$PROVIDER_NAME" \
+        --location="global" \
+        --workload-identity-pool="$POOL_NAME" \
+        --project="$PROJECT_ID" --quiet 2>/dev/null; then
+        print_success "Deleted OIDC provider: $PROVIDER_NAME"
+    else
+        print_warning "OIDC provider not found or already deleted"
+    fi
+
+    print_header "Removing Workload Identity Pool"
+    if gcloud iam workload-identity-pools delete "$POOL_NAME" \
+        --location="global" \
+        --project="$PROJECT_ID" --quiet 2>/dev/null; then
+        print_success "Deleted Workload Identity Pool: $POOL_NAME"
+    else
+        print_warning "Workload Identity Pool not found or already deleted"
+    fi
+
+    print_header "Cleanup Complete"
+    echo -e "${GREEN}GCP resources have been removed.${NC}"
+}
+
+if [ "$1" = "--cleanup" ]; then
+    cleanup
+else
+    main "$@"
+fi
