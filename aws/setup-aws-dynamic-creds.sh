@@ -276,6 +276,53 @@ print_hcp_config() {
     echo ""
 }
 
+# Cleanup resources
+cleanup() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║   AWS Dynamic Credentials Cleanup                              ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    check_prerequisites
+
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    OIDC_PROVIDER_ARN="arn:aws:iam::${ACCOUNT_ID}:oidc-provider/${OIDC_PROVIDER_URL}"
+
+    echo ""
+    echo -e "${YELLOW}The following resources will be deleted:${NC}"
+    echo "  - IAM Role inline policy: ${POLICY_NAME}"
+    echo "  - IAM Role: ${ROLE_NAME}"
+    echo ""
+    echo -e "${YELLOW}The OIDC provider (${OIDC_PROVIDER_URL}) will NOT be removed${NC}"
+    echo -e "${YELLOW}since it may be shared with other workspaces.${NC}"
+    echo ""
+    read -p "Continue? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    print_header "Removing IAM Role Policy"
+    if aws iam delete-role-policy --role-name "$ROLE_NAME" --policy-name "$POLICY_NAME" 2>/dev/null; then
+        print_success "Deleted inline policy: $POLICY_NAME"
+    else
+        print_warning "Inline policy '$POLICY_NAME' not found or already deleted"
+    fi
+
+    print_header "Removing IAM Role"
+    if aws iam delete-role --role-name "$ROLE_NAME" 2>/dev/null; then
+        print_success "Deleted IAM role: $ROLE_NAME"
+    else
+        print_warning "IAM role '$ROLE_NAME' not found or already deleted"
+    fi
+
+    print_header "Cleanup Complete"
+    echo -e "${GREEN}AWS resources have been removed.${NC}"
+    echo -e "The OIDC provider was kept. To remove it manually:"
+    echo -e "  aws iam delete-open-id-connect-provider --open-id-connect-provider-arn ${OIDC_PROVIDER_ARN}"
+}
+
 # Main execution
 main() {
     echo -e "${BLUE}"
@@ -309,4 +356,8 @@ main() {
     echo -e "Configure the settings above in your registry module's test configuration."
 }
 
-main "$@"
+if [ "$1" = "--cleanup" ]; then
+    cleanup
+else
+    main "$@"
+fi
