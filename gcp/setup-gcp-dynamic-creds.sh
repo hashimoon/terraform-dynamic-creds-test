@@ -206,6 +206,7 @@ print_hcp_config() {
     echo -e "TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL         ${GREEN}${SERVICE_ACCOUNT_EMAIL}${NC}"
     echo -e "TFC_GCP_WORKLOAD_PROVIDER_NAME            ${GREEN}${WORKLOAD_PROVIDER_NAME}${NC}"
     echo -e "TFC_GCP_WORKLOAD_IDENTITY_AUDIENCE        ${GREEN}gcp.workload.identity${NC}"
+    echo -e "TF_VAR_gcp_project_id                     ${GREEN}${PROJECT_ID}${NC}"
     echo ""
 }
 
@@ -245,4 +246,88 @@ main() {
     echo -e "Configure the settings above in your registry module's test configuration."
 }
 
-main "$@"
+# Cleanup resources
+cleanup() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║   GCP Dynamic Credentials Cleanup                              ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    check_prerequisites
+
+    # Get project info
+    CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+    if [ -n "$CURRENT_PROJECT" ]; then
+        read -p "GCP Project ID [$CURRENT_PROJECT]: " PROJECT_ID
+        PROJECT_ID=${PROJECT_ID:-$CURRENT_PROJECT}
+    else
+        read -p "GCP Project ID: " PROJECT_ID
+    fi
+
+    if [ -z "$PROJECT_ID" ]; then
+        print_error "Project ID is required"
+        exit 1
+    fi
+
+    SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+    echo ""
+    echo -e "${YELLOW}The following resources will be deleted:${NC}"
+    echo "  - Service Account: $SERVICE_ACCOUNT_EMAIL"
+    echo "  - OIDC Provider: $PROVIDER_NAME"
+    echo "  - Workload Identity Pool: $POOL_NAME"
+    echo "  - IAM Role Admin binding for service account"
+    echo ""
+    read -p "Continue? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    print_header "Removing IAM Role Admin Binding"
+    if gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+        --role="roles/iam.roleAdmin" \
+        --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+        --condition=None 2>/dev/null; then
+        print_success "Removed roles/iam.roleAdmin binding"
+    else
+        print_warning "IAM binding not found or already removed"
+    fi
+
+    print_header "Removing Service Account"
+    if gcloud iam service-accounts delete "$SERVICE_ACCOUNT_EMAIL" \
+        --project="$PROJECT_ID" --quiet 2>/dev/null; then
+        print_success "Deleted service account: $SERVICE_ACCOUNT_EMAIL"
+    else
+        print_warning "Service account not found or already deleted"
+    fi
+
+    print_header "Removing OIDC Provider"
+    if gcloud iam workload-identity-pools providers delete "$PROVIDER_NAME" \
+        --location="global" \
+        --workload-identity-pool="$POOL_NAME" \
+        --project="$PROJECT_ID" --quiet 2>/dev/null; then
+        print_success "Deleted OIDC provider: $PROVIDER_NAME"
+    else
+        print_warning "OIDC provider not found or already deleted"
+    fi
+
+    print_header "Removing Workload Identity Pool"
+    if gcloud iam workload-identity-pools delete "$POOL_NAME" \
+        --location="global" \
+        --project="$PROJECT_ID" --quiet 2>/dev/null; then
+        print_success "Deleted Workload Identity Pool: $POOL_NAME"
+    else
+        print_warning "Workload Identity Pool not found or already deleted"
+    fi
+
+    print_header "Cleanup Complete"
+    echo -e "${GREEN}GCP resources have been removed.${NC}"
+}
+
+if [ "$1" = "--cleanup" ]; then
+    cleanup
+else
+    main "$@"
+fi
