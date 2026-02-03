@@ -99,9 +99,9 @@ get_azure_info() {
 get_hcp_config() {
     print_header "HCP Terraform Configuration"
 
-    read -p "HCP Terraform Organization ID (e.g., org-abc123xyz): " ORG_ID
-    if [ -z "$ORG_ID" ]; then
-        print_error "Organization ID is required"
+    read -p "HCP Terraform Organization Name (e.g., my-org): " ORG_NAME
+    if [ -z "$ORG_NAME" ]; then
+        print_error "Organization name is required"
         exit 1
     fi
 
@@ -109,7 +109,7 @@ get_hcp_config() {
     echo "Optional: Restrict to a specific module (leave blank to allow all modules)"
     read -p "Module Name (e.g., terraform-azurerm-network): " MODULE_NAME
 
-    print_success "Organization ID: $ORG_ID"
+    print_success "Organization: $ORG_NAME"
     if [ -n "$MODULE_NAME" ]; then
         print_success "Module: $MODULE_NAME"
     else
@@ -166,12 +166,13 @@ create_federated_credential() {
     print_header "Creating Federated Credential"
 
     # Build the subject identifier for module tests
+    # Format: organization:{ORG_NAME}:module:{MODULE_NAME}:operation:test_run
     if [ -n "$MODULE_NAME" ]; then
-        # Specific module, all versions
-        SUBJECT="organization:${ORG_ID}:module:${MODULE_NAME}:*"
+        # Specific module
+        SUBJECT="organization:${ORG_NAME}:module:${MODULE_NAME}:operation:test_run"
     else
-        # All modules in the organization
-        SUBJECT="organization:${ORG_ID}:module:*:*"
+        # All modules in the organization (use wildcard)
+        SUBJECT="organization:${ORG_NAME}:module:*"
     fi
 
     # Check if federated credential already exists
