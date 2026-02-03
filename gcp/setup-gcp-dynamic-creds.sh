@@ -144,18 +144,32 @@ create_oidc_provider() {
         print_success "Restored OIDC Provider: $PROVIDER_NAME"
     else
         local attribute_condition
+        # For module TEST runs (not regular workspace runs), the subject format is:
+        # organization:{ORG_NAME}:module:{MODULE_NAME}:operation:test_run
+        #
+        # Regular workspace runs have a different format:
+        # organization:{ORG_NAME}:project:{PROJECT}:workspace:{WORKSPACE}:run_phase:{plan|apply}
+        #
+        # We MUST check for ':operation:test_run' to ensure we only accept test runs.
         if [ -n "$MODULE_NAME" ]; then
-            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME' && assertion.terraform_module_name == '$MODULE_NAME'"
+            # Filter by organization, specific module, and verify it's a test run
+            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME' && assertion.sub.contains(':module:$MODULE_NAME:') && assertion.sub.endsWith(':operation:test_run')"
         else
-            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME'"
+            # Filter by organization and verify it's a test run (any module)
+            attribute_condition="assertion.terraform_organization_name == '$ORG_NAME' && assertion.sub.endsWith(':operation:test_run')"
         fi
 
+        # Note: For module test runs, HCP Terraform provides these claims:
+        # - terraform_run_phase (always "plan" for test runs)
+        # - terraform_organization_id
+        # - terraform_organization_name
+        # - terraform_run_id
         gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_NAME" \
             --location="global" \
             --workload-identity-pool="$POOL_NAME" \
             --issuer-uri="https://app.terraform.io" \
             --allowed-audiences="gcp.workload.identity" \
-            --attribute-mapping="google.subject=assertion.sub,attribute.terraform_run_id=assertion.terraform_run_id,attribute.terraform_module_name=assertion.terraform_module_name,attribute.terraform_test_run=assertion.terraform_test_run,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name" \
+            --attribute-mapping="google.subject=assertion.sub,attribute.terraform_run_id=assertion.terraform_run_id,attribute.terraform_run_phase=assertion.terraform_run_phase,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name" \
             --attribute-condition="$attribute_condition" \
             --project="$PROJECT_ID"
         print_success "Created OIDC Provider: $PROVIDER_NAME"
