@@ -165,13 +165,24 @@ create_service_principal() {
 create_federated_credential() {
     print_header "Creating Federated Credential"
 
-    # Build the subject identifier for module tests
-    # Format: organization:{ORG_NAME}:module:{MODULE_NAME}:operation:test_run
+    # Build the subject identifier for module TEST runs.
+    #
+    # Test run subject format:
+    #   organization:{ORG_NAME}:module:{MODULE_NAME}:operation:test_run
+    #
+    # Regular workspace run subject format (different - uses project/workspace):
+    #   organization:{ORG_NAME}:project:{PROJECT}:workspace:{WORKSPACE}:run_phase:{plan|apply}
+    #
+    # The presence of ':module:' in the subject is UNIQUE to test runs, so matching
+    # on ':module:' inherently restricts to test runs only.
     if [ -n "$MODULE_NAME" ]; then
-        # Specific module
+        # Specific module - exact match including :operation:test_run
         SUBJECT="organization:${ORG_NAME}:module:${MODULE_NAME}:operation:test_run"
     else
-        # All modules in the organization (use wildcard)
+        # All modules in the organization
+        # Note: Azure wildcards only work at the end, so we can't specify
+        # *:operation:test_run. However, ':module:' only appears in test run
+        # subjects, so this is still secure.
         SUBJECT="organization:${ORG_NAME}:module:*"
     fi
 
