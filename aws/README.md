@@ -9,7 +9,37 @@ A minimal Terraform module to verify AWS dynamic credentials work with HCP Terra
 - Outputs the account ID, ARN, region, and test policy ARN
 - Includes tests that verify both read and write permissions
 
-## AWS Setup
+## Automated Setup
+
+### Prerequisites
+
+Authenticate with AWS using a named profile:
+
+```bash
+aws login --profile dynamic-creds-test
+```
+
+This opens your browser for authentication. Once complete, export the profile:
+
+```bash
+export AWS_PROFILE=dynamic-creds-test
+```
+
+### Run the setup script
+
+```bash
+./setup-aws-dynamic-creds.sh
+```
+
+The script will:
+1. Create or reuse an OIDC Identity Provider for `app.terraform.io`
+2. Create an IAM role with a trust policy scoped to your module tests
+3. Attach the minimum permissions required for the tests:
+   - `sts:GetCallerIdentity` (read verification)
+   - `iam:CreatePolicy`, `iam:DeletePolicy`, `iam:GetPolicy`, `iam:GetPolicyVersion`, `iam:ListPolicyVersions` (scoped to `terraform-dynamic-creds-test-policy-*`)
+4. Print the environment variables to configure in HCP Terraform
+
+## Manual Setup
 
 ### 1. Create OIDC Identity Provider (if not exists)
 
