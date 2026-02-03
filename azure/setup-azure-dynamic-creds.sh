@@ -277,4 +277,63 @@ main() {
     echo -e "Configure the settings above in your registry module's test configuration."
 }
 
-main "$@"
+# Cleanup resources
+cleanup() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║   Azure Dynamic Credentials Cleanup                            ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    check_prerequisites
+
+    # Get subscription info
+    SUBSCRIPTION_ID=$(az account show --query id -o tsv 2>/dev/null || echo "")
+    SUBSCRIPTION_NAME=$(az account show --query name -o tsv 2>/dev/null || echo "")
+
+    # Check if app exists
+    APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv 2>/dev/null || echo "")
+
+    if [ -z "$APP_ID" ]; then
+        print_warning "App Registration '$APP_NAME' not found. Nothing to clean up."
+        exit 0
+    fi
+
+    APP_OBJECT_ID=$(az ad app show --id "$APP_ID" --query id -o tsv 2>/dev/null || echo "")
+
+    echo ""
+    echo -e "${YELLOW}The following resources will be deleted:${NC}"
+    echo "  - Contributor role assignment on subscription: $SUBSCRIPTION_NAME"
+    echo "  - App Registration: $APP_NAME (Client ID: $APP_ID)"
+    echo "  (This also removes the service principal and federated credentials)"
+    echo ""
+    read -p "Continue? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    print_header "Removing Role Assignment"
+    if az role assignment delete --assignee "$APP_ID" --role "Contributor" \
+        --scope "/subscriptions/$SUBSCRIPTION_ID" 2>/dev/null; then
+        print_success "Removed Contributor role assignment"
+    else
+        print_warning "Role assignment not found or already removed"
+    fi
+
+    print_header "Removing App Registration"
+    if az ad app delete --id "$APP_OBJECT_ID" 2>/dev/null; then
+        print_success "Deleted App Registration: $APP_NAME"
+    else
+        print_warning "App Registration not found or already deleted"
+    fi
+
+    print_header "Cleanup Complete"
+    echo -e "${GREEN}Azure resources have been removed.${NC}"
+}
+
+if [ "$1" = "--cleanup" ]; then
+    cleanup
+else
+    main "$@"
+fi
